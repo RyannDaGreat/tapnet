@@ -28,7 +28,7 @@ def run_tapnext(
     Args:
         video: Input video as either a file path, numpy array (T×H×W×C), or torch tensor (T×C×H×W).
         device: Torch device to run inference on, defaults to cuda if available
-        queries: Query points of shape (N, 3) in format (t, y, x) for frame index
+        queries: Query points of shape (N, 3) in format (t, x, y) for frame index
                 and pixel coordinates. Can be numpy array or torch tensor. Used for tracking specific points.
         grid_size: Size M for an N=M×M grid of tracking points on a frame. Must be provided
                   if queries is None.
@@ -39,8 +39,8 @@ def run_tapnext(
     
     Returns:
         tuple: (pred_tracks, pred_visibility) where:
-            - pred_tracks: numpy array of shape (T, N, 2) containing x,y coordinates
-            - pred_visibility: numpy array of shape (T, N) indicating point visibility
+            - pred_tracks: torch tensor of shape (T, N, 2) containing x,y coordinates
+            - pred_visibility: torch tensor of shape (T, N) indicating point visibility
     
     Track Modes:
         1. Grid tracking: Set grid_size > 0 to track M×M points from grid_query_frame
@@ -135,8 +135,10 @@ def run_tapnext(
     
     # Scale y and x coordinates to 256x256 for model input
     queries_scaled = queries_unscaled.clone()
-    queries_scaled[:, :, 1] *= 256 / height  # y
-    queries_scaled[:, :, 2] *= 256 / width   # x
+    queries_scaled[:, :, 1] *= 256 / width  # x
+    queries_scaled[:, :, 2] *= 256 / height # y
+
+    queries_scaled_yx = queries_scaled.flip(2) # XY -> YX
     
     # Run inference
     with torch.no_grad():
@@ -158,16 +160,18 @@ def run_tapnext(
     pred_tracks[..., 1] *= height / 256  # y
     
     # Convert to CPU numpy arrays for compatibility
-    pred_tracks = pred_tracks.cpu().numpy()
-    pred_visibility = pred_visibility.cpu().numpy()
+    pred_tracks = pred_tracks
+    pred_visibility = pred_visibility
     
     # Validate output tensor shapes
     rp.validate_tensor_shapes(
-        pred_tracks="numpy: T N 2",
-        pred_visibility="numpy: T N",
+        pred_tracks="torch: T N 2",
+        pred_visibility="torch: T N",
         video="T H W C",  # Original input video
         verbose=False
     )
+
+    pred_tracks = pred_tracks.flip(2) #YX -> XY
     
     return pred_tracks, pred_visibility
 
@@ -206,7 +210,7 @@ def _create_grid_queries(grid_size, grid_query_frame, height, width, device, dty
     queries_list = []
     for frame_idx in frame_list:
         for y, x in zip(grid_y.flatten(), grid_x.flatten()):
-            queries_list.append([frame_idx, y.item(), x.item()])
+            queries_list.append([frame_idx, x.item(), y.item()])
     
     queries_tensor = torch.tensor(queries_list, dtype=dtype).to(device)
     return rearrange(queries_tensor, 'n d -> 1 n d')  # B×N×3
