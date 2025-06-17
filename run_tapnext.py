@@ -122,37 +122,43 @@ def run_tapnext(
     # Convert to T×H×W×C format and normalize to [-1, 1]
     video_thwc = rearrange(video_resized, 't c h w -> t h w c')  # T×H×W×C
     video_normalized = video_thwc * 2 - 1  # Convert [0,1] to [-1,1]
-    video_normalized = rearrange(video_normalized, 't h w c -> 1 t h w c')  # B×T×H×W×C
     
     # Create query points
     if queries is not None:
-        if not isinstance(queries, torch.Tensor):
-            queries = torch.tensor(queries, dtype=dtype)
-        queries_unscaled = rearrange(queries, 'n d -> 1 n d').to(device, dtype=dtype)  # B×N×3
+        queries_unscaled = torch.tensor(queries, dtype=dtype, device=device)
     else:
         # Create grid points (grid_size is guaranteed to be not None due to validation above)
         queries_unscaled = _create_grid_queries(grid_size, grid_query_frame, height, width, device, dtype)
     
-    # Scale y and x coordinates to 256x256 for model input
+    # Scale x and y coordinates to 256x256 for model input
     queries_scaled = queries_unscaled.clone()
-    queries_scaled[:, :, 1] *= 256 / width  # x
-    queries_scaled[:, :, 2] *= 256 / height # y
+    queries_scaled[:, 1] *= 256 / width  # x
+    queries_scaled[:, 2] *= 256 / height # y
 
-    queries_scaled_yx = queries_scaled.flip(2) # XY -> YX
+    queries_scaled_yx = queries_scaled[:, [0, 2, 1]]  # XY -> YX
+
+    rp.validate_tensor_shapes(
+        queries_unscaled  = 'torch: N TXY',
+        queries_scaled    = 'torch: N TXY',
+        queries_scaled_yx = 'torch: N TXY',
+        video_normalized  = 'torch: T H W C',
+        video_resized     = 'torch: T C H W',
+        TXY=3,
+    )
     
     # Run inference
     with torch.no_grad():
-        outputs = loaded_model(video_normalized, queries_scaled)
+        outputs = loaded_model(video_normalized[None], queries_scaled_yx[None])
     
     # Extract tracks and visibility
-    pred_tracks = outputs['tracks'][0]  # N×T×2
+    pred_tracks = outputs['tracks'][0]  # N×T×2 (XY)
     pred_occlusion = outputs['occlusion'][0]  # N×T
     
     # Convert occlusion to visibility
     pred_visibility = torch.sigmoid(pred_occlusion) < 0.5  # Lower occlusion = visible
     
     # Rearrange to T×N×2 format to match run_cotracker
-    pred_tracks = rearrange(pred_tracks, 'n t d -> t n d')  # T×N×2
+    pred_tracks = rearrange(pred_tracks, 'n t d -> t n d')  # T×N×2 (XY)
     pred_visibility = rearrange(pred_visibility, 'n t -> t n')  # T×N
     
     # Scale tracks back to original resolution
@@ -165,17 +171,17 @@ def run_tapnext(
     
     # Validate output tensor shapes
     rp.validate_tensor_shapes(
-        pred_tracks="torch: T N 2",
+        pred_tracks="torch: T N XY",
         pred_visibility="torch: T N",
         video="T H W C",  # Original input video
-        verbose=False
+        verbose=False,
+        XY=2,
     )
-
-    pred_tracks = pred_tracks.flip(2) #YX -> XY
     
     return pred_tracks, pred_visibility
 
 
+@lru_cache(3)
 def _create_grid_queries(grid_size, grid_query_frame, height, width, device, dtype):
     """Create grid query points with proper spacing-based margins.
     
@@ -196,24 +202,25 @@ def _create_grid_queries(grid_size, grid_query_frame, height, width, device, dty
         raise ValueError(f"grid_query_frame must be int, list, or tuple, got {type(grid_query_frame)}")
     
     # Margin is half the spacing between grid points
+    x_spacing = width  / (grid_size + 1)
     y_spacing = height / (grid_size + 1)
-    x_spacing = width / (grid_size + 1)
-    y_margin = y_spacing / 2
     x_margin = x_spacing / 2
+    y_margin = y_spacing / 2
+    x_start, x_end = x_margin, width  - x_margin
     y_start, y_end = y_margin, height - y_margin
-    x_start, x_end = x_margin, width - x_margin
     
-    y_coords = torch.linspace(y_start, y_end, grid_size)
     x_coords = torch.linspace(x_start, x_end, grid_size)
-    grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing='ij')
+    y_coords = torch.linspace(y_start, y_end, grid_size)
+    grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
     
     queries_list = []
     for frame_idx in frame_list:
-        for y, x in zip(grid_y.flatten(), grid_x.flatten()):
+        for x, y in zip(grid_x.flatten(), grid_y.flatten()):
             queries_list.append([frame_idx, x.item(), y.item()])
     
-    queries_tensor = torch.tensor(queries_list, dtype=dtype).to(device)
-    return rearrange(queries_tensor, 'n d -> 1 n d')  # B×N×3
+    queries_tensor = torch.tensor(queries_list, dtype=dtype).to(device) # N x 3
+
+    return queries_tensor
 
 
 @lru_cache(maxsize=3)
