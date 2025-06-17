@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.mp4
 
 # Distribution / packaging
 .Python
@@ -22,3 +23,24 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+video.mp4
+
+
+#<RP Default Gitignore Start>
+*.pyc
+*.bak
+*.swh
+*.swi
+*.swj
+*.swk
+*.swl
+*.swm
+*.swn
+*.swo
+*.swp
+*.un~
+*.gstmp
+*.ipynb_checkpoints
+*.DS_Store
+#<RP Default Gitignore End>
+
