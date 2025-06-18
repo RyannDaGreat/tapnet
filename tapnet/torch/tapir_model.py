@@ -474,7 +474,7 @@ class TAPIR(nn.Module):
     inv_perm[perm] = torch.arange(num_queries)
 
     chs = range(0, num_queries, query_chunk_size)
-    display_eta = iter(rp.eta(len(chs)*num_iters, "Tapnet: "))
+    display_eta = iter(rp.eta(len(chs)*num_iters, "Tapnet"))
 
     for ch in chs:
       perm_chunk = perm[ch : ch + query_chunk_size]

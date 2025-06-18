@@ -14,6 +14,8 @@ import sys
 #Includes this file and the tapnet module
 sys.path.append(rp.get_parent_folder(__file__))
 
+DEFAULT_MODEL_DIR = "~/.cache/tapnet"
+
 def run_tapnet(
     video,
     *,
@@ -22,7 +24,7 @@ def run_tapnet(
     grid_size=None,
     grid_query_frame=0,
     model="tapnext",  # "tapir", "bootstapir", or "tapnext"
-    model_dir="~/.cache/tapnet",
+    model_dir=None,
     show_progress=True,
 ):
     """
@@ -45,7 +47,7 @@ def run_tapnet(
                           of ints for multi-frame initialization. Only used when grid_size is not None (default: 0)
                           Not used if queries is not None.
         model: Which model to use: "tapir", "bootstapir", or "tapnext" (default: "tapnext")
-        model_dir: Directory to cache downloaded models (default: "~/.cache/tapnet" == rp.r._default_tapnet_model_dir)
+        model_dir: Directory to cache downloaded models (default: "~/.cache/tapnet" from rp.git.tapnet.DEFAULT_MODEL_DIR)
         show_progress: If True, shows a progress bar during calculation.
     
     Returns:
@@ -98,6 +100,8 @@ def run_tapnet(
 
     """
     #THE ABOVE DOCSTRING SHOULD BE MIRRORED WITH rp.run_tapnet
+
+    model_dir = model_dir or DEFAULT_MODEL_DIR
 
     # Validate that either grid_size or queries is provided
     if grid_size is None and queries is None:
@@ -245,14 +249,14 @@ def _create_grid_queries(grid_size, grid_query_frame, height, width, device, dty
 
     
 # Model checkpoint URLs
-_checkpoint_urls = {
+checkpoint_urls = {
     "tapir": "https://storage.googleapis.com/dm-tapnet/tapir_checkpoint_panning.pt",
     "bootstapir": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",
     "tapnext": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",  # Using BootsTAPIR as placeholder
 }
 
 @lru_cache()
-def get_tapnet_model(model="tapnext", device=None, dtype=None, model_dir="~/.cache/tapnet"):
+def get_tapnet_model(model="tapnext", device=None, dtype=None, model_dir=None, download_only=False):
     """
     Loads and caches the TAPNext/TAPIR model.
     
@@ -260,13 +264,20 @@ def get_tapnet_model(model="tapnext", device=None, dtype=None, model_dir="~/.cac
         model: Which model to load: "tapir", "bootstapir", or "tapnext"
         device: The torch device to load the model onto
         dtype: The torch dtype to use
+        model_dir: The folder where we cache checkpoints
+        download_only: If true, just checks that its downloaded and returns the checkpoint.pt path string
     
     Returns:
         The loaded TAPNext/TAPIR model
     
     Downloads are cached in ~/.cache/tapnet/
     """
+    if not model in checkpoint_urls:
+        raise ValueError(f"rp.r.git.tapnet.get_tapnet_model: {repr(model)} is not a valid model; please choose from {list(checkpoint_urls)}")
+
     from tapnet.torch import tapir_model
+
+    model_dir = model_dir or DEFAULT_MODEL_DIR
     
     # Create cache directory
     model_dir = rp.get_absolute_path(model_dir)
@@ -278,12 +289,15 @@ def get_tapnet_model(model="tapnext", device=None, dtype=None, model_dir="~/.cac
     
     if not rp.path_exists(checkpoint_path):
         print(f"Downloading {model} checkpoint...")
-        url = _checkpoint_urls.get(model, _checkpoint_urls["bootstapir"])
+        url = checkpoint_urls.get(model, checkpoint_urls[model])
         rp.download_url(url, checkpoint_path, show_progress=True)
         print(f"Downloaded {model} checkpoint to {checkpoint_path}")
+
+    if download_only:
+        return checkpoint_path
     
     # Initialize model
-    print(f"Loading {model} model...")
+    print(f"Loading {model} model from {checkpoint_path}...")
     model = tapir_model.TAPIR(pyramid_level=1)
     
     # Load checkpoint
