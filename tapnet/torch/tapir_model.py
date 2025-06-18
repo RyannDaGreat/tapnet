@@ -26,6 +26,7 @@ from torch import nn
 import torch.nn.functional as F
 import tree
 
+import rp
 
 class FeatureGrids(NamedTuple):
   """Feature grids for a video, used to compute trajectories.
@@ -144,6 +145,7 @@ class TAPIR(nn.Module):
       query_chunk_size: Optional[int] = 64,
       get_query_feats: bool = False,
       refinement_resolutions: Optional[List[Tuple[int, int]]] = None,
+      show_progress=False,
   ) -> Mapping[str, torch.Tensor]:
     """Runs a forward pass of the model.
 
@@ -196,6 +198,7 @@ class TAPIR(nn.Module):
         query_features,
         query_points,
         query_chunk_size,
+        show_progress=show_progress,
     )
 
     p = self.num_pips_iter
@@ -401,6 +404,8 @@ class TAPIR(nn.Module):
       query_chunk_size: Optional[int] = None,
       causal_context: Optional[dict[str, torch.Tensor]] = None,
       get_causal_context: bool = False,
+      *,
+      show_progress=False,
   ) -> Mapping[str, Any]:
     """Estimates trajectories given features for a video and query features.
 
@@ -468,7 +473,10 @@ class TAPIR(nn.Module):
     inv_perm = torch.zeros_like(perm)
     inv_perm[perm] = torch.arange(num_queries)
 
-    for ch in range(0, num_queries, query_chunk_size):
+    chs = range(0, num_queries, query_chunk_size)
+    display_eta = iter(rp.eta(len(chs)*num_iters, "Tapnet: "))
+
+    for ch in chs:
       perm_chunk = perm[ch : ch + query_chunk_size]
       chunk = query_features.lowres[0][:, perm_chunk]
 
@@ -505,6 +513,8 @@ class TAPIR(nn.Module):
 
       mixer_feats = None
       for i in range(num_iters):
+        if show_progress:
+            next(display_eta)
         feature_level = i // self.num_pips_iter + 1
         queries = [
             query_features.hires[feature_level][:, perm_chunk],

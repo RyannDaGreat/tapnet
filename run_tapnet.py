@@ -9,6 +9,7 @@ import torch
 from functools import lru_cache
 from einops import rearrange
 import rp
+import sys
 
 #Includes this file and the tapnet module
 sys.path.append(rp.get_parent_folder(__file__))
@@ -22,6 +23,7 @@ def run_tapnet(
     grid_query_frame=0,
     model="tapnext",  # "tapir", "bootstapir", or "tapnext"
     model_dir="~/.cache/tapnet",
+    show_progress=True,
 ):
     """
     Runs the TAPNext/TAPIR model on a video for point tracking.
@@ -44,6 +46,7 @@ def run_tapnet(
                           Not used if queries is not None.
         model: Which model to use: "tapir", "bootstapir", or "tapnext" (default: "tapnext")
         model_dir: Directory to cache downloaded models (default: "~/.cache/tapnet" == rp.r._default_tapnet_model_dir)
+        show_progress: If True, shows a progress bar during calculation.
     
     Returns:
         tuple: (pred_tracks, pred_visibility) where:
@@ -162,7 +165,11 @@ def run_tapnet(
     
     # Run inference
     with torch.no_grad():
-        outputs = loaded_model(video_normalized[None], queries_scaled_yx[None])
+        outputs = loaded_model(
+            video_normalized[None],
+            queries_scaled_yx[None],
+            show_progress=show_progress,
+        )
     
     # Extract tracks and visibility
     pred_tracks = outputs['tracks'][0]  # N×T×2 (XY)
