@@ -10,6 +10,8 @@ from functools import lru_cache
 from einops import rearrange
 import rp
 
+sys.path.append(rp.get_parent_folder(__file__))
+
 def run_tapnext(
     video,
     *,
