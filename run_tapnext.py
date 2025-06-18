@@ -10,9 +10,10 @@ from functools import lru_cache
 from einops import rearrange
 import rp
 
+#Includes this file and the tapnet module
 sys.path.append(rp.get_parent_folder(__file__))
 
-def run_tapnext(
+def run_tapnet(
     video,
     *,
     device=None,
@@ -25,38 +26,46 @@ def run_tapnext(
     """
     Runs the TAPNext/TAPIR model on a video for point tracking.
     TAPNext is a transformer-based model that can track any point in a video,
-    with state-of-the-art accuracy and speed.
+    with state-of-the-art accuracy and speed (as of Jun 2025).
+
+    See https://github.com/google-deepmind/tapnet
     
     Args:
-        video: Input video as either a file path, numpy array (T×H×W×C), or torch tensor (T×C×H×W).
+        video: Input video as either a file path string like './video.mp4', glob of image files like '/path/to/*frames.png', 
+               list of PIL images, numpy array (T×H×W×3) with either dtype np.uint8 or floating point values between 0 and 1,
+               or as a torch tensor (T×3×H×W) with values between 0 and 1.
         device: Torch device to run inference on, defaults to cuda if available
-        queries: Query points of shape (N, 3) in format (t, x, y) for frame index
-                and pixel coordinates. Can be numpy array or torch tensor. Used for tracking specific points.
+        queries: Query points of shape (N, 3) in format (t, y, x) for frame index
+                 and pixel coordinates. Can be numpy array or torch tensor. Used for tracking specific points.
         grid_size: Size M for an N=M×M grid of tracking points on a frame. Must be provided
-                  if queries is None.
+                   if queries is None, not used if queries are provided.
         grid_query_frame: Frame index(es) to start tracking from. Can be int or iterable 
-                         of ints for multi-frame initialization. Only used when grid_size is not None (default: 0)
-        model: Which model to use: "tapir", "bootstapir", or "tapnext"
-        model_dir: Directory to cache downloaded models (default: "~/.cache/tapnet")
+                          of ints for multi-frame initialization. Only used when grid_size is not None (default: 0)
+                          Not used if queries is not None.
+        model: Which model to use: "tapir", "bootstapir", or "tapnext" (default: "tapnext")
+        model_dir: Directory to cache downloaded models (default: "~/.cache/tapnet" == rp.r._default_tapnet_model_dir)
     
     Returns:
         tuple: (pred_tracks, pred_visibility) where:
-            - pred_tracks: torch tensor of shape (T, N, 2) containing x,y coordinates
-            - pred_visibility: torch tensor of shape (T, N) indicating point visibility
+            - pred_tracks: numpy array of shape (T, N, 2) containing x,y coordinates
+            - pred_visibility: numpy array of shape (T, N) indicating point visibility
     
     Track Modes:
         1. Grid tracking: Set grid_size > 0 to track M×M points from grid_query_frame
         2. Query tracking: Provide queries tensor to track specific points
         3. Dense tracking: Default with grid_size=20 if no queries provided
+
+    Note: As of Jun 18 2025, using the MPS device on Mac yields incorrect results. If on Mac, use CPU.
     
     EXAMPLE:
+
         >>> video = rp.load_video(
         ...     "https://github.com/facebookresearch/co-tracker/raw/refs/heads/main/assets/apple.mp4",
         ...     use_cache=True,
         ... )
         ...
         ... # TAPNext
-        ... tracks, visibility = run_tapnext(
+        ... tracks, visibility = run_tapnet(
         ...     video,
         ...     device="cuda",
         ...     grid_size=10,  # Track 10x10 grid of points
@@ -83,7 +92,10 @@ def run_tapnext(
         ...             )
         ...     new_video.append(frame)
         ... rp.fansi_print("SAVED " + rp.save_video_mp4(new_video), "blue cyan", "bold")
+
     """
+    #THE ABOVE DOCSTRING SHOULD BE MIRRORED WITH rp.run_tapnet
+
     # Validate that either grid_size or queries is provided
     if grid_size is None and queries is None:
         raise ValueError("Either grid_size or queries must be provided")
@@ -97,16 +109,16 @@ def run_tapnext(
     # Warn about MPS device issues
     if device == "mps":
         rp.fansi_print_lines(
-            "run_tapnext WARNING: MPS device may produce incorrect tracking results.",
-            "Consider using 'cuda' or 'cpu' device for reliable outputs.",
-            "Even PYTORCH_ENABLE_MPS_FALLBACK=1 will not fix the accuracy issues.",
+            "run_tapnet WARNING: MPS device (on Mac) may produce incorrect tracking results.",
+            "Consider using 'cpu' device for reliable outputs even though its slower.",
+            "Even PYTORCH_ENABLE_MPS_FALLBACK=1 might not fix the accuracy issues.",
             style="yellow"
         )
     
     dtype = torch.float32
     
     # Get the model
-    loaded_model = _get_tapnext_model(model, device, dtype, model_dir)
+    loaded_model = get_tapnet_model(model, device, dtype, model_dir)
     
     # Load video if it's a path
     if isinstance(video, str):
@@ -224,9 +236,16 @@ def _create_grid_queries(grid_size, grid_query_frame, height, width, device, dty
 
     return queries_tensor
 
+    
+# Model checkpoint URLs
+_checkpoint_urls = {
+    "tapir": "https://storage.googleapis.com/dm-tapnet/tapir_checkpoint_panning.pt",
+    "bootstapir": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",
+    "tapnext": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",  # Using BootsTAPIR as placeholder
+}
 
-@lru_cache(maxsize=3)
-def _get_tapnext_model(model="tapnext", device=None, dtype=None, model_dir="~/.cache/tapnet"):
+@lru_cache()
+def get_tapnet_model(model="tapnext", device=None, dtype=None, model_dir="~/.cache/tapnet"):
     """
     Loads and caches the TAPNext/TAPIR model.
     
@@ -242,13 +261,6 @@ def _get_tapnext_model(model="tapnext", device=None, dtype=None, model_dir="~/.c
     """
     from tapnet.torch import tapir_model
     
-    # Model checkpoint URLs
-    checkpoint_urls = {
-        "tapir": "https://storage.googleapis.com/dm-tapnet/tapir_checkpoint_panning.pt",
-        "bootstapir": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",
-        "tapnext": "https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt",  # Using BootsTAPIR as placeholder
-    }
-    
     # Create cache directory
     model_dir = rp.get_absolute_path(model_dir)
     rp.make_directory(model_dir)
@@ -259,7 +271,7 @@ def _get_tapnext_model(model="tapnext", device=None, dtype=None, model_dir="~/.c
     
     if not rp.path_exists(checkpoint_path):
         print(f"Downloading {model} checkpoint...")
-        url = checkpoint_urls.get(model, checkpoint_urls["bootstapir"])
+        url = _checkpoint_urls.get(model, _checkpoint_urls["bootstapir"])
         rp.download_url(url, checkpoint_path, show_progress=True)
         print(f"Downloaded {model} checkpoint to {checkpoint_path}")
     
@@ -285,8 +297,6 @@ def _get_tapnext_model(model="tapnext", device=None, dtype=None, model_dir="~/.c
     return model
 
 
-
-
 if __name__ == "__main__":
     # Demo usage
     print("Running TAPNext demo...")
@@ -298,7 +308,7 @@ if __name__ == "__main__":
     )
     
     # Run TAPNext
-    tracks, visibility = run_tapnext(
+    tracks, visibility = run_tapnet(
         video,
         device="cuda" if torch.cuda.is_available() else "cpu",
         grid_size=10,  # Track 10x10 grid of points
@@ -324,5 +334,5 @@ if __name__ == "__main__":
                 )
         new_video.append(frame)
     
-    output_path = rp.save_video_mp4(new_video, "output_tapnext.mp4")
+    output_path = rp.save_video_mp4(new_video, "output_tapnet.mp4")
     rp.fansi_print(f"SAVED {output_path}", "blue cyan", "bold")
